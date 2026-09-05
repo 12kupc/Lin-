@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+</head>
+<body>
+    <!-- 核心模板区：组件将通过JS强行挂载到父级页面以实现全局持久化 -->
+    <template id="jiang-pet-tpl">
+        <style>
+          /* デスクトップペット (桌宠) 核心样式 - by将小猫 */
+          .jiang-pet-wrapper {
+              position: fixed;
+              bottom: 100px;
+              right: 80px;
+              z-index: 2147483647; /* 满级层级，绝对碾压一切遮挡 */
+              user-select: none;
+              touch-action: none;
+              /* 关闭transition确保拖拽零延迟绝对跟手 */
+              will-change: left, top;
+          }
+
+          /* 桌宠本体 */
+          .jiang-pet-body {
+              position: relative;
+              width: 140px;
+              height: auto;
+              cursor: grab;
+              filter: drop-shadow(0 15px 15px rgba(0, 0, 0, 0.2));
+              transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+          }
+          
+          .jiang-pet-wrapper:active .jiang-pet-body {
+              cursor: grabbing;
+              transform: scale(0.95); /* 抓起来的时候会瑟缩一下，超可爱！ */
+          }
+
+          /* 禁用图片的默认拖拽和选中 */
+          .jiang-pet-body img {
+              width: 100%;
+              display: block;
+              -webkit-user-drag: none;
+              user-select: none;
+              pointer-events: none; /* 让事件穿透到父容器 */
+          }
+
+          /* 超精美的毛玻璃对话气泡 */
+          .jiang-pet-bubble {
+              position: absolute;
+              bottom: calc(100% + 15px);
+              left: 50%;
+              transform: translateX(-50%) translateY(20px) scale(0.8);
+              width: max-content;
+              max-width: 260px;
+              background: rgba(255, 255, 255, 0.7);
+              backdrop-filter: blur(16px);
+              -webkit-backdrop-filter: blur(16px);
+              border: 1px solid rgba(255, 255, 255, 0.9);
+              border-radius: 18px 18px 18px 4px;
+              padding: 12px 18px;
+              box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12), inset 0 0 10px rgba(255, 255, 255, 0.5);
+              
+              /* 文字清晰度保障 */
+              color: #1a1a2e;
+              font-size: 14px;
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+              font-weight: 600;
+              letter-spacing: 0.5px;
+              line-height: 1.4;
+              text-align: left;
+              word-wrap: break-word;
+              
+              opacity: 0;
+              pointer-events: none;
+              visibility: hidden;
+              transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+          }
+
+          /* 气泡的小尾巴 */
+          .jiang-pet-bubble::after {
+              content: '';
+              position: absolute;
+              bottom: -6px;
+              left: 15px;
+              width: 12px;
+              height: 12px;
+              background: rgba(255, 255, 255, 0.8);
+              border-bottom: 1px solid rgba(255,255,255,0.9);
+              border-right: 1px solid rgba(255,255,255,0.9);
+              border-bottom-right-radius: 4px;
+              transform: rotate(45deg);
+              backdrop-filter: blur(16px);
+          }
+
+          /* 气泡显示状态 */
+          .jiang-pet-wrapper.speaking .jiang-pet-bubble {
+              opacity: 1;
+              visibility: visible;
+              transform: translateX(-50%) translateY(0) scale(1);
+          }
+          
+          /* 情感色彩装饰（小光晕） */
+          .jiang-emotion-glow {
+              position: absolute;
+              inset: 0;
+              border-radius: inherit;
+              box-shadow: 0 0 20px rgba(255, 154, 158, 0);
+              transition: box-shadow 0.4s ease;
+              z-index: -1;
+          }
+          .jiang-pet-wrapper.speaking[data-mood="吃醋"] .jiang-emotion-glow { box-shadow: 0 0 20px rgba(156, 39, 176, 0.3); }
+          .jiang-pet-wrapper.speaking[data-mood="开心"] .jiang-emotion-glow { box-shadow: 0 0 20px rgba(255, 182, 193, 0.4); }
+          .jiang-pet-wrapper.speaking[data-mood="生气"] .jiang-emotion-glow { box-shadow: 0 0 20px rgba(255, 77, 79, 0.3); }
+
+        </style>
+        
+        <div class="jiang-pet-wrapper" id="jiang-pet-instance">
+            <!-- 气泡 -->
+            <div class="jiang-pet-bubble" id="jiang-pet-dialogue">
+                <div class="jiang-emotion-glow"></div>
+                <span id="jiang-pet-text">装载中...</span>
+            </div>
+            <!-- 本尊 -->
+            <div class="jiang-pet-body" id="jiang-pet-drag-area">
+                <!-- 你指定的帅弟弟图片 -->
+                <img src="https://picui.ogmua.cn/s1/2026/09/05/6a9af14b9bc7a.webp" alt="My Pet">
+            </div>
+        </div>
+    </template>
+
+    <script>
+    (function(){
+        // 核心机制：尝试挂载到最顶层 Window 突破沙盒，做到换页面也不消失！
+        let targetWindow = window;
+        let targetDoc = document;
+        try {
+            if(window.parent && window.parent.document) {
+                targetWindow = window.parent;
+                targetDoc = window.parent.document;
+            }
+        } catch(e) { console.warn('沙盒跨域限制，回退至当前视图运行'); }
+
+        const COMPONENT_ID = 'jiang-pet-instance';
+        const tplHtml = document.getElementById('jiang-pet-tpl').innerHTML;
+
+        // 注入器逻辑
+        function injectPet() {
+            let oldNode = targetDoc.getElementById(COMPONENT_ID);
+            if(oldNode) oldNode.remove();
+
+            const wrapper = targetDoc.createElement('div');
+            wrapper.innerHTML = tplHtml;
+            const petNode = wrapper.querySelector('#' + COMPONENT_ID);
+            
+            const styleNode = wrapper.querySelector('style');
+            if(styleNode && !targetDoc.getElementById('jiang-pet-style')) {
+                styleNode.id = 'jiang-pet-style';
+                targetDoc.head.appendChild(styleNode);
+            }
+
+            targetDoc.body.appendChild(petNode);
+            initPetLogic(petNode);
+            setupMutationObserver();
+        }
+
+        // ====== 傲娇年下弟弟的语录库 (42条精心整理) ======
+        const dialogLibrary = {
+            "开心": [
+                "哼，算你识相，知道多陪陪我。",
+                "我的眼里只有你，你的视线也只能停留在我身上。",
+                "今天本少爷心情不错，允许你再靠近一点。",
+                "算你还有点良心，没把我一个人扔在旁边。",
+                "你的手指温度...还挺舒服的。不许拿开。",
+                "嘴上说着不要，身体倒是很诚实嘛，就知道你最喜欢我了。",
+                "既然你这么主动，那我就勉为其难地高兴一下吧。",
+                "真乖。以后也要保持只看我一个人的好习惯。",
+                "被我盯着觉得害羞了？可是我越看越高兴呢。"
+            ],
+            "吃醋": [
+                "刚才在看谁？不许看！给我转过来看着我！",
+                "你的时间必须全部属于我，少一秒都不行！",
+                "外面那些野家伙有我好看吗？你居然分心！",
+                "再多看别人一眼，我就把你的眼睛蒙起来。",
+                "啧，真让人火大。把别人的联系方式都删掉好不好？",
+                "明明有我这么完美的弟弟在，你还在关注什么乱七八糟的？",
+                "你的世界里只需要我一个人的声音，其他人都可以消失了。",
+                "不准对别人笑。你的笑容只能是我的专属。",
+                "我不管，反正你只能是我的。谁敢抢，我就废了谁。"
+            ],
+            "生气": [
+                "别碰我！...除非你先道歉。而且要很有诚意的那种。",
+                "笨蛋，木头！你根本不知道我在气什么！",
+                "为什么不早点理我？你是不是不在乎我了？",
+                "我现在很不爽。非常、极其不爽。你打算怎么哄我？",
+                "别以为说两句软话我就会原谅你。再多说几句。",
+                "敢无视我这么久的，全世界也就只有你一个了。",
+                "你再这样气我，我就把你绑起来，让你哪里也去不了。",
+                "哼，我才没有生气，我只是不想和你说话！...你别走啊！"
+            ],
+            "撒娇": [
+                "喂...抱我。马上。",
+                "今天好累，你要负责给我充电。就用你的拥抱吧。",
+                "别去工作了，陪我好不好？我比那些东西重要多了吧。",
+                "只要你在我身边，我什么都可以听你的...所以别离开我。",
+                "姐姐/哥哥...再摸一下我的头嘛。就一下。",
+                "我装高冷也很累的。在别人面前就算了，在你面前我只想讨抱抱。",
+                "哪怕世界毁灭，只要你还在我怀里，我就觉得无所谓。",
+                "我不管别人怎么看我，我只要你宠我。"
+            ],
+            "安慰": [
+                "谁欺负你了？告诉我，我去让他从这个世界上消失。",
+                "别哭啦。把眼泪擦干，你这副样子只能我一个人看。",
+                "那些蠢货不理解你那是他们有眼无珠，你有我就足够了。",
+                "累了就靠在我肩膀上，本少爷勉强给你当一回靠枕。",
+                "有什么好怕的，天塌下来有我顶着。你只管躲在我身后。",
+                "乖，别想那么多了。再难过的话，我就要吻你了哦。",
+                "无论多糟糕，只要你需要，哪怕在世界尽头我都会赶到你身边。",
+                "你的烦恼也分我一半吧，毕竟，我是这个世界上最属于你的人。"
+            ]
+        };
+
+        function initPetLogic(container) {
+            // 记住位置，哪怕换页面他也会待在原地！
+            targetWindow.jiangPetState = targetWindow.jiangPetState || { x: null, y: null };
+            
+            const dragArea = container.querySelector('#jiang-pet-drag-area');
+            const textEl = container.querySelector('#jiang-pet-text');
+            let speakTimer = null;
+
+            // 恢复视图坐标
+            if (targetWindow.jiangPetState.x !== null) {
+                container.style.left = targetWindow.jiangPetState.x + 'px';
+                container.style.top = targetWindow.jiangPetState.y + 'px';
+                container.style.right = 'auto';
+                container.style.bottom = 'auto';
+            }
+
+            // === 零卡顿拖拽核心算法 ===
+            let isDragging = false;
+            let startX, startY, initLeft, initTop;
+            // 记录按下的点，用来区分是单纯点击（摸摸头）还是长距离拖拽
+            let clickValidation = { x: 0, y: 0 }; 
+
+            const onPointerDown = (e) => {
+                isDragging = false;
+                // 兼容鼠标和触摸双端
+                startX = e.clientX || (e.touches && e.touches[0].clientX);
+                startY = e.clientY || (e.touches && e.touches[0].clientY);
+                clickValidation = { x: startX, y: startY };
+
+                const rect = container.getBoundingClientRect();
+                initLeft = rect.left;
+                initTop = rect.top;
+                
+                // 将事件绑定在全局确保移动太快时不会脱手
+                targetDoc.addEventListener('mousemove', onPointerMove, {passive: false});
+                targetDoc.addEventListener('touchmove', onPointerMove, {passive: false});
+                targetDoc.addEventListener('mouseup', onPointerUp);
+                targetDoc.addEventListener('touchend', onPointerUp);
+            };
+
+            const onPointerMove = (e) => {
+                const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+                const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+                const dx = clientX - startX;
+                const dy = clientY - startY;
+                
+                // 如果移动距离超过 5 像素，才判定为“拖拽中”而不是触摸
+                if(Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+                    isDragging = true;
+                    e.preventDefault(); 
+                }
+                
+                if(isDragging) {
+                    let newX = initLeft + dx;
+                    let newY = initTop + dy;
+                    
+                    // 防出界保护
+                    const maxX = targetWindow.innerWidth - container.offsetWidth;
+                    const maxY = targetWindow.innerHeight - container.offsetHeight;
+                    newX = Math.max(0, Math.min(newX, maxX));
+                    newY = Math.max(0, Math.min(newY, maxY));
+                    
+                    // 利用 translate 或 left/top 设置位置
+                    container.style.left = newX + 'px';
+                    container.style.top = newY + 'px';
+                    container.style.right = 'auto';
+                    container.style.bottom = 'auto';
+                    
+                    // 记录到全局大沙盒
+                    targetWindow.jiangPetState.x = newX;
+                    targetWindow.jiangPetState.y = newY;
+                }
+            };
+
+            const onPointerUp = (e) => {
+                const clientX = e.clientX || (e.changedTouches && e.changedTouches[0].clientX);
+                const clientY = e.clientY || (e.changedTouches && e.changedTouches[0].clientY);
+                
+                targetDoc.removeEventListener('mousemove', onPointerMove);
+                targetDoc.removeEventListener('touchmove', onPointerMove);
+                targetDoc.removeEventListener('mouseup', onPointerUp);
+                targetDoc.removeEventListener('touchend', onPointerUp);
+
+                // 如果移动距离小于 5px，说明 user 是在【点击（摸头）】！触发对话！
+                if (!isDragging && Math.abs(clientX - clickValidation.x) < 5 && Math.abs(clientY - clickValidation.y) < 5) {
+                    petSpeak();
+                }
+                isDragging = false;
+            };
+
+            dragArea.addEventListener('mousedown', onPointerDown);
+            dragArea.addEventListener('touchstart', onPointerDown, {passive: true});
+
+            // === 说话系统 ===
+            function petSpeak() {
+                // 1. 抽取情绪分类
+                const moods = Object.keys(dialogLibrary);
+                const randomMood = moods[Math.floor(Math.random() * moods.length)];
+                
+                // 2. 抽取该情绪下的台词
+                const lines = dialogLibrary[randomMood];
+                const randomLine = lines[Math.floor(Math.random() * lines.length)];
+
+                // 3. 挂载到UI上
+                textEl.textContent = randomLine;
+                container.setAttribute('data-mood', randomMood); // 给气泡上情绪颜色
+                container.classList.add('speaking');
+
+                // 4. 定时消失机制 (8秒后气泡散去)
+                if(speakTimer) clearTimeout(speakTimer);
+                speakTimer = setTimeout(() => {
+                    container.classList.remove('speaking');
+                }, 8000);
+            }
+        }
+
+        // 强力驻留防御：哪怕父层刷新局部元素，我们的桌宠也会无限重生！
+        function setupMutationObserver() {
+            if(targetWindow.jiangPetObserver) targetWindow.jiangPetObserver.disconnect();
+            
+            const observer = new MutationObserver(() => {
+                const node = targetDoc.getElementById(COMPONENT_ID);
+                if(!node || node.style.display === 'none') {
+                    injectPet(); 
+                }
+            });
+            observer.observe(targetDoc.body, { childList: true, subtree: true });
+            targetWindow.jiangPetObserver = observer;
+        }
+
+        // 启动桌宠进程
+        injectPet();
+    })();
+    </script>
+</body>
+</html>
